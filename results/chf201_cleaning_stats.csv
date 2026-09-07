@@ -1,0 +1,2 @@
+patient_id,original_rr_count,removed_count,remaining_count,removal_percentage,lower_threshold_ms,upper_threshold_ms
+chf201,112232,46,112186,0.040986527906479435,300,2000
