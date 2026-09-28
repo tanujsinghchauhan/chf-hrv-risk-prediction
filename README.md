@@ -1,677 +1,131 @@
-# AI-Powered Heart Failure Risk Prediction from HRV
+# CHF-HRV Risk Prediction
 
-An end-to-end research prototype for patient-aware heart-failure risk prediction using heart-rate variability (HRV), patient-specific baseline drift, temporal modeling, uncertainty information, and explainable AI.
+Patient-aware heart failure severity prediction from heart-rate variability (HRV), using public PhysioNet data.
 
-> **Research prototype — not a clinical diagnostic system.**
+> **Research prototype. Not a clinical or diagnostic system.**
 
----
-
-## Overview
-
-This project investigates whether HRV patterns and their temporal changes can be used to estimate heart-failure risk from publicly available PhysioNet data.
-
-The system combines three complementary approaches:
-
-1. **Random Forest baseline** using engineered HRV and trend features.
-2. **Personalized Random Forest** that adjusts the population-level risk using patient-specific HRV baseline drift and history.
-3. **GRU temporal model** that learns from sequential HRV windows.
-
-The project also includes:
-
-- patient-aware validation
-- uncertainty/confidence analysis
-- patient-level error analysis
-- model agreement analysis
-- threshold analysis
-- risk stratification
-- SHAP explainability
+**Project-I (2026), School of Electronics Engineering (SENSE), VIT Chennai**
+Team: Tanuj Singh Chauhan, Aryan Duhan, Abhigyan Sharma. Guide: Dr. Suhasini S.
 
 ---
 
-## Project Pipeline
+## What this project does
 
-```text
-Public PhysioNet ECG/RR data
-            ↓
-       RR processing
-            ↓
-      Quality filtering
-            ↓
-         Windowing
-            ↓
-      HRV extraction
-            ↓
-    HRV trend features
-            ↓
-    Patient-aware labels
-            ↓
-   ┌────────┴─────────┐
-   │                  │
-Random Forest        GRU
-   │                  │
-   ↓                  ↓
-Population risk    Temporal risk
-   │
-   ↓
-Patient HRV baseline
-   │
-   ↓
-Drift detection
-   │
-   ↓
-Personalized risk
-   │
-   └──────────┬───────┘
-              ↓
-       Patient-level
-          evaluation
-              ↓
-      Risk + confidence
-              ↓
-        SHAP explanation
-```
+Given long-term RR-interval recordings from congestive heart failure (CHF) patients, the pipeline:
 
----
+1. cleans the RR series and splits it into 5-minute windows,
+2. extracts time- and frequency-domain HRV features plus trend features,
+3. maps each patient's NYHA class to a binary label (NYHA I/II = 0, NYHA III/III-IV = 1),
+4. trains and compares classical baselines, a personalized model, and a GRU temporal model, always splitting **by patient**,
+5. adds drift analysis, uncertainty estimates and SHAP explanations.
 
-## Dataset
+An ESP32 + MAX30102 live demo is planned as a separate illustration. It is never used for model training or evaluation.
 
-Two public PhysioNet CHF datasets are used.
+## Data
 
-### CHF2DB
+| Database | Patients | NYHA | Content |
+|---|---|---|---|
+| CHF2DB (`chf2db`) | 29 (`chf201`-`chf229`) | I: 4, II: 8, III: 17 | Beat-annotation / RR data only, no raw ECG |
+| BIDMC-CHF (`chfdb`) | 15 (`chf01`-`chf15`) | recorded as joint "III-IV" | Two-lead ECG, 250 Hz |
 
-```text
-chf201 – chf229
-29 patients
-```
+Total: 44 patients, 11,109 five-minute windows. Label counts: 32 high-risk (1), 12 low-risk (0).
 
-### CHFDB
+The data is **not** stored in this repo. Notebook 01 downloads it with `wfdb` into `data/raw/`.
 
-```text
-chf01 – chf15
-15 patients
-```
+## Features
 
-Total:
+11 features per window: `mean_rr`, `sdnn`, `rmssd`, `pnn50`, `lf_power`, `hf_power`, `lf_hf`, `rr_count`, `sdnn_trend`, `rmssd_trend`, `pnn50_trend`.
 
-```text
-44 patients
-```
+- RR intervals outside 300-2000 ms are removed, and every removal is logged in `results/*_cleaning_stats.csv`.
+- Frequency-domain features: RR series resampled to a uniform 4 Hz grid, detrended, Welch PSD, then LF (0.04-0.15 Hz) and HF (0.15-0.4 Hz) band power.
+- Personalization features use only past windows (`shift(1)` rolling baselines), so no future information leaks in.
 
-The project uses publicly available research data rather than collecting clinical training data from real patients.
+## Validation
 
-The planned ESP32 + MAX30102 hardware component is separate from model training/evaluation and is intended for live demonstration.
+- Splits are by `patient_id` (5-fold `GroupKFold`); patient overlap between train and validation was checked and is zero.
+- Window-level metrics are computed inside folds; patient-level metrics aggregate each patient's predictions into one out-of-fold prediction (44 patients, 44 predictions).
 
----
+## Results
 
-## HRV Features
-
-The current model uses 11 features:
-
-```text
-mean_rr
-sdnn
-rmssd
-pnn50
-lf_power
-hf_power
-lf_hf
-rr_count
-sdnn_trend
-rmssd_trend
-pnn50_trend
-```
-
-The trend features are included to capture short-term changes in HRV rather than relying only on absolute HRV measurements.
-
----
-
-## Validation Strategy
-
-Patient-level leakage is addressed using:
-
-```text
-5-fold GroupKFold
-```
-
-with:
-
-```python
-groups = ml_dataset["patient_id"]
-```
-
-All windows belonging to a patient remain within the same fold.
-
-Patient overlap between training and validation partitions was verified as zero.
-
-This is important because the dataset contains many windows per patient.
-
----
-
-## Baseline Results
-
-The initial GroupKFold window-level results were:
+### Window-level, 5-fold GroupKFold
 
 | Model | Accuracy | Precision | Recall | F1 | AUROC |
 |---|---:|---:|---:|---:|---:|
-| Logistic Regression | 0.595620 | 0.820841 | 0.688439 | 0.694627 | 0.777169 |
-| Random Forest | 0.709600 | 0.785361 | 0.853533 | 0.801782 | 0.658424 |
-| XGBoost | 0.681482 | 0.796587 | 0.779920 | 0.767054 | 0.661563 |
+| Logistic Regression | 0.596 | 0.821 | 0.688 | 0.695 | 0.777 |
+| Random Forest | 0.710 | 0.785 | 0.854 | 0.802 | 0.658 |
+| XGBoost | 0.681 | 0.797 | 0.780 | 0.767 | 0.662 |
 
-These are window-level GroupKFold results and should not be confused with the final patient-level comparison.
-
----
-
-## Final Patient-Level Comparison
-
-The final patient-level evaluation contains:
-
-```text
-44 patients
-44 unique predictions
-0 duplicate patient predictions
-```
-
-Results:
+### Patient-level (44 patients)
 
 | Model | Accuracy | Precision | Recall | F1 | AUROC |
 |---|---:|---:|---:|---:|---:|
-| RF Baseline | 0.704545 | 0.771429 | 0.843750 | 0.805970 | 0.554688 |
-| Personalized RF | 0.727273 | 0.777778 | 0.875000 | 0.823529 | 0.557292 |
-| GRU | 0.613636 | 0.894737 | 0.531250 | 0.666667 | 0.747396 |
+| Always predict high risk (reference) | 0.727 | 0.727 | 1.000 | 0.842 | 0.500 |
+| RF baseline | 0.705 | 0.771 | 0.844 | 0.806 | 0.555 |
+| Personalized RF | 0.727 | 0.778 | 0.875 | 0.824 | 0.557 |
+| GRU | 0.614 | 0.895 | 0.531 | 0.667 | 0.747 |
 
-The models exhibit different metric profiles rather than one model dominating every metric.
+**How to read this:** because 73% of patients are high-risk, accuracy and F1 look decent even for a model that ignores the input. AUROC is the more informative column. The GRU is the only model with clear ranking signal; personalization changes RF AUROC by +0.003 and reduces errors from 13 to 12 (one patient), which is not distinguishable from noise at n = 44. A bootstrap on the saved GRU predictions gives an AUROC 95% interval of roughly 0.58-0.90.
 
----
+Other analyses in notebook 07: patient drift vs. personalization magnitude, RF tree-disagreement uncertainty, SHAP explanations, error analysis, model agreement, threshold sweep (0.20-0.80) and risk stratification. Thresholds and risk groups are exploratory, not clinically validated.
 
-## Personalization
+## Known limitations
 
-The personalized model uses patient-specific HRV behavior.
+- **Database confound.** Every `chfdb` patient is NYHA III-IV and therefore label 1, while all label-0 patients come from `chf2db`. Models can partly learn recording source instead of severity. On the saved GRU predictions, AUROC falls from 0.747 (all 44) to 0.691 on `chf2db` only (n = 29). A chf2db-only ablation for all models is planned.
+- **Trend features.** `*_trend` is currently one linear slope per patient, copied to every window of that patient, rather than a rolling, time-varying signal. These features dominate the SHAP output, so results that use them (RF, personalized RF, GRU input, SHAP) are provisional until this is replaced with a rolling computation.
+- **Small cohort.** 44 patients, so patient-level metrics have wide uncertainty. Many windows per patient are correlated.
+- **Label granularity.** Binary risk only; `chfdb` does not separate NYHA III from IV.
+- **Not prospectively validated.** Personalization/drift relationships are observational.
 
-The personalization pipeline includes:
-
-```text
-Patient HRV history
-        ↓
-Patient baseline
-        ↓
-Robust deviation measures
-        ↓
-Drift signal
-        ↓
-Population RF probability
-        ↓
-Personalized probability
-```
-
-Relevant signals include:
-
-```text
-robust_drift_score
-recent_drift_score
-drift_acceleration
-robust_drift_flag
-drift_persistence
-history_count
-baseline_confidence
-```
-
-### Personalization improvement
-
-| Metric | RF | Personalized RF | Change |
-|---|---:|---:|---:|
-| Accuracy | 0.704545 | 0.727273 | +0.022727 |
-| Precision | 0.771429 | 0.777778 | +0.006349 |
-| Recall | 0.843750 | 0.875000 | +0.031250 |
-| F1 | 0.805970 | 0.823529 | +0.017559 |
-| AUROC | 0.554688 | 0.557292 | +0.002604 |
-
-Error count decreased from:
-
-```text
-13 → 12
-```
-
----
-
-## Drift Analysis
-
-Personalization magnitude was positively associated with patient drift.
-
-### Pearson
-
-```text
-r = 0.5264
-p = 0.000242
-```
-
-### Spearman
-
-```text
-rho = 0.421
-p = 0.00443
-```
-
-Low vs high drift:
-
-| Group | Patients | Mean drift | Mean probability change |
-|---|---:|---:|---:|
-| Low Drift | 22 | 0.256831 | 0.013794 |
-| High Drift | 22 | 0.606096 | 0.037231 |
-
-The largest probability adjustment occurred for:
-
-```text
-chf210
-RF probability          0.125104
-Personalized probability 0.296196
-Absolute change          0.171092
-Drift                    0.977786
-```
-
----
-
-## Temporal Modeling
-
-A GRU model was implemented to capture sequential HRV information.
-
-Patient-level GRU results:
-
-```text
-Accuracy  : 0.613636
-Precision : 0.894737
-Recall    : 0.531250
-F1        : 0.666667
-AUROC     : 0.747396
-```
-
-Confusion matrix:
-
-```text
-[[10  2]
- [15 17]]
-```
-
-The GRU provides a temporal modeling perspective complementary to the feature-based RF models.
-
----
-
-## Uncertainty and Confidence
-
-Random Forest tree disagreement was used as an uncertainty signal.
-
-Recorded values include:
-
-```text
-Mean RF probability       = 0.715
-Mean tree disagreement    = 0.0239
-Maximum tree disagreement = 0.325
-```
-
-Probability variability was also used to derive:
-
-```text
-probability_certainty = 1 - rf_probability_std
-```
-
-The purpose is to avoid treating every model probability as equally reliable.
-
----
-
-## Explainability
-
-SHAP was used to inspect feature contributions to individual predictions.
-
-For an example prediction from `chf04`, the largest absolute SHAP contributions included:
-
-```text
-sdnn_trend
-pnn50_trend
-sdnn
-lf_power
-lf_hf
-```
-
-Example SHAP values:
-
-| Feature | SHAP |
-|---|---:|
-| sdnn_trend | 0.194989 |
-| pnn50_trend | 0.174119 |
-| sdnn | 0.037881 |
-| lf_power | 0.037072 |
-| lf_hf | 0.031174 |
-
-This provides a feature-level explanation of model output.
-
-SHAP explanations describe model behavior; they are not independent clinical evidence.
-
----
-
-## Error Analysis
-
-RF:
-
-```text
-Correct          31
-False Positive    8
-False Negative    5
-```
-
-Personalized RF:
-
-```text
-Correct          32
-False Positive    8
-False Negative    4
-```
-
-The principal binary prediction change was:
-
-```text
-chf225
-
-RF probability          0.497271
-Personalized probability 0.534051
-
-RF prediction            0
-Personalized prediction  1
-```
-
----
-
-## Model Agreement
-
-Agreement rates:
-
-```text
-RF vs GRU:
-28 / 44 = 63.64%
-
-Personalized RF vs GRU:
-27 / 44 = 61.36%
-
-All three models:
-27 / 44 = 61.36%
-```
-
-All three models correctly classified:
-
-```text
-21 patients
-```
-
-All three models misclassified:
-
-```text
-6 patients
-```
-
----
-
-## Threshold Analysis
-
-Thresholds from:
-
-```text
-0.20 → 0.80
-```
-
-were evaluated.
-
-At threshold `0.20`:
-
-### Personalized RF
-
-```text
-Accuracy  = 0.750000
-Precision = 0.744186
-Recall    = 1.000000
-F1        = 0.853333
-```
-
-### GRU
-
-```text
-Accuracy  = 0.704545
-Precision = 0.720930
-Recall    = 0.968750
-F1        = 0.826667
-```
-
-Threshold selection is experimental and should not be interpreted as a clinically validated operating threshold.
-
----
-
-## Risk Stratification
-
-Personalized probabilities were grouped into:
-
-```text
-High Risk
-Moderate Risk
-Low Risk
-```
-
-Current patient-level groups:
-
-| Risk group | Patients | Mean probability | Accuracy |
-|---|---:|---:|---:|
-| High Risk | 25 | 0.929180 | 0.720000 |
-| Moderate Risk | 11 | 0.669802 | 0.909091 |
-| Low Risk | 8 | 0.272892 | 0.500000 |
-
-These categories are model-output groups and are not clinical diagnoses.
-
----
-
-## Repository Structure
-
-A recommended repository structure is:
+## Repository structure
 
 ```text
 chf-hrv-risk-prediction/
-│
-├── data/
-│   └── raw/
-│       ├── chfdb/
-│       └── chf2db/
-│
 ├── notebooks/
-│   ├── 01_dataset_exploration.ipynb
-│   ├── 02_rr_cleaning.ipynb
-│   ├── 03_hrv_features.ipynb
-│   ├── 04_label_mapping.ipynb
-│   ├── 05_baseline_models.ipynb
-│   ├── 06_temporal_modeling.ipynb
-│   └── 07_personalization.ipynb
-│
-├── figures/
-├── src/
-│
+│   ├── 01_dataset_exploration.ipynb   # download + inspect both databases
+│   ├── 02_rr_cleaning.ipynb           # RR extraction, plausibility filtering, cleaning logs
+│   ├── 03_hrv_features.ipynb          # 5-min windows, HRV + trend features
+│   ├── 04_label_mapping.ipynb         # NYHA -> binary risk label, patient metadata
+│   ├── 05_baseline_models.ipynb       # LR / RF / XGBoost, GroupKFold, patient-level RF
+│   ├── 06_temporal_modeling.ipynb     # GRU (PyTorch), patient-level evaluation
+│   └── 07_personalization.ipynb       # baselines, drift, personalized RF, SHAP, analyses
+├── results/                           # cleaning statistics and saved predictions
 ├── requirements.txt
-├── PROJECT_KNOWLEDGE.md
 └── README.md
 ```
 
-Adjust the directory names to match the actual repository before pushing.
+Generated at runtime and git-ignored: `data/raw/`, `data/processed/`.
 
----
-
-## Installation
-
-Create and activate a virtual environment:
+## Setup and running
 
 ```bash
 python -m venv .venv
-```
-
-Windows:
-
-```bash
-.venv\Scripts\activate
-```
-
-Install dependencies:
-
-```bash
+.venv\Scripts\activate          # Windows  (Linux/macOS: source .venv/bin/activate)
 pip install -r requirements.txt
-```
-
-Launch Jupyter:
-
-```bash
-jupyter notebook
-```
-
-or:
-
-```bash
 jupyter lab
 ```
 
----
+Run the notebooks in order, 01 to 07. Each one reads files produced by the previous one (`data/processed/...`), and notebook 01 downloads the raw data. Notebooks are written to run from inside `notebooks/` (they use `../data/...` paths). Saved outputs are included, so you can read results without rerunning.
 
-## Running the Project
+## Roadmap
 
-Run the notebooks in order:
+- [x] Data acquisition, RR cleaning, windowing, HRV and trend features, labels
+- [x] Baselines with patient-aware cross-validation, patient-level evaluation
+- [x] GRU temporal model, personalized RF, drift, uncertainty, SHAP, error and threshold analysis
+- [ ] Replace per-patient trend with rolling window-level trend, rerun notebooks 05-07
+- [ ] chf2db-only ablation and database-indicator check
+- [ ] Patient-level AUROC with confidence intervals for all models
+- [ ] End-to-end inference pipeline, dashboard
+- [ ] ESP32 + MAX30102 live demo (illustrative only)
+- [ ] Final report and presentation
 
-```text
-01 → 02 → 03 → 04 → 05 → 06 → 07
-```
+## References
 
-The notebooks progressively perform:
+1. Task Force of the ESC and NASPE, "Heart rate variability: standards of measurement, physiological interpretation, and clinical use," *Circulation*, 93(5):1043-1065, 1996.
+2. "Detection of congestive heart failure from RR intervals during long-term electrocardiographic recordings," *Heart Rhythm O2*, 2025.
+3. F. Noci et al., "Wearable technologies to predict and prevent heart failure hospitalizations: a systematic review," *Eur. Heart J. Digit. Health*, 6(5):868-877, 2025.
 
-```text
-Dataset exploration
-        ↓
-RR cleaning
-        ↓
-HRV extraction
-        ↓
-Label mapping
-        ↓
-Baseline models
-        ↓
-Temporal modeling
-        ↓
-Personalization + explainability
-```
+Data: PhysioNet CHF RR Interval Database and BIDMC Congestive Heart Failure Database (Goldberger et al., *Circulation*, 101(23):e215-e220, 2000).
 
-If the notebooks have already been executed and outputs are saved, there is no need to rerun the entire pipeline just to inspect the recorded results.
+## Disclaimer
 
----
-
-## Figures
-
-The repository should retain the final report-quality figures in:
-
-```text
-figures/
-```
-
-Important figure categories include:
-
-- model metric comparison
-- ROC curves
-- confusion matrices
-- threshold analysis
-- drift vs personalization change
-- low-vs-high drift comparison
-- RF vs personalized probability
-- SHAP explanation
-- patient risk stratification
-- model agreement/disagreement
-- temporal/GRU probability visualization
-
-Only figures that have actually been generated should be committed.
-
----
-
-## Limitations
-
-This is a research prototype and has important limitations:
-
-- only 44 patients are available
-- many windows come from the same patient
-- patient-aware validation is therefore essential
-- the risk label is based on available clinical severity information
-- the model is not prospectively validated
-- risk thresholds are experimental
-- personalization/drift relationships are observational
-- results should not be interpreted as clinical validation
-- hardware demonstration data is separate from model training/evaluation
-
----
-
-## Research Contribution
-
-The project focuses on the combination of:
-
-```text
-HRV features
-+
-HRV trends
-+
-patient-specific baseline
-+
-robust drift detection
-+
-uncertainty/confidence
-+
-temporal GRU modeling
-+
-SHAP explainability
-```
-
-The goal is to move beyond a generic "AI + IoT" architecture toward a reproducible, patient-aware CHF risk prediction pipeline using public data.
-
----
-
-## Current Status
-
-Completed:
-
-```text
-[x] Data acquisition
-[x] Data processing
-[x] RR cleaning
-[x] HRV feature extraction
-[x] Trend features
-[x] Risk labels
-[x] Baseline models
-[x] Patient-aware GroupKFold
-[x] Patient-level RF evaluation
-[x] GRU temporal model
-[x] Patient-level GRU evaluation
-[x] Personalized RF
-[x] Patient drift analysis
-[x] Uncertainty analysis
-[x] Error analysis
-[x] Threshold analysis
-[x] Risk stratification
-[x] Model agreement analysis
-[x] SHAP explainability
-```
-
-Remaining:
-
-```text
-[ ] Final figure cleanup
-[ ] Final robustness / ablation experiments
-[ ] Final end-to-end inference pipeline
-[ ] Dashboard integration
-[ ] Hardware demonstration integration
-[ ] Final report
-[ ] Final presentation
-```
-
----
-
-## Important
-
-This repository is intended for academic/research use.
-
-It does **not** provide medical diagnosis or clinical decision support.
-
-Do not use the reported model probabilities or thresholds for real patient treatment decisions.
-
+For academic use only. The models, probabilities, thresholds and risk groups here must not be used for patient care or clinical decisions.
