@@ -1,131 +1,158 @@
-# CHF-HRV Risk Prediction
+# HRV-Based Risk Prediction and Monitoring System
 
-Patient-aware heart failure severity prediction from heart-rate variability (HRV), using public PhysioNet data.
+## 1. Project Overview
 
-> **Research prototype. Not a clinical or diagnostic system.**
+This project explores heart-rate variability (HRV) features derived from beat-to-beat RR intervals and uses a trained machine-learning model to produce a risk-related prediction. The project includes a notebook-based development workflow, an ESP32 sensor data-collection path, and a Streamlit dashboard for viewing measurements, calculated features, and model output.
 
-**Project-I (2026), School of Electronics Engineering (SENSE), VIT Chennai**
-Team: Tanuj Singh Chauhan, Aryan Duhan, Abhigyan Sharma. Guide: Dr. Suhasini S.
+The system is intended as a **research and prototype project**, not a clinically validated diagnostic tool. Model predictions should not be used to make medical decisions.
 
----
+## 2. What Has Been Implemented
 
-## What this project does
+- **Dataset exploration** in Jupyter notebooks.
+- **RR-interval cleaning and preparation** for downstream analysis.
+- **HRV feature extraction** from RR-interval windows.
+- **Label mapping** for the target classes used in modelling.
+- **Baseline model experiments** and evaluation.
+- **Temporal modelling experiments** to investigate sequential/window-based information.
+- **Personalization experiments** exploring individual-level handling.
+- **ESP32 serial data path** for receiving sensor records in the dashboard.
+- **Streamlit dashboard** with Test and Live ESP32 modes, charts, HRV feature display, prediction output, sample history/logging, and export-related functionality.
+- **CSV replay in Test mode** using the two included test profiles. These files are generated test fixtures for checking the dashboard pipeline; they are **not real participant recordings**.
 
-Given long-term RR-interval recordings from congestive heart failure (CHF) patients, the pipeline:
+## 3. Repository Structure
 
-1. cleans the RR series and splits it into 5-minute windows,
-2. extracts time- and frequency-domain HRV features plus trend features,
-3. maps each patient's NYHA class to a binary label (NYHA I/II = 0, NYHA III/III-IV = 1),
-4. trains and compares classical baselines, a personalized model, and a GRU temporal model, always splitting **by patient**,
-5. adds drift analysis, uncertainty estimates and SHAP explanations.
-
-An ESP32 + MAX30102 live demo is planned as a separate illustration. It is never used for model training or evaluation.
-
-## Data
-
-| Database | Patients | NYHA | Content |
-|---|---|---|---|
-| CHF2DB (`chf2db`) | 29 (`chf201`-`chf229`) | I: 4, II: 8, III: 17 | Beat-annotation / RR data only, no raw ECG |
-| BIDMC-CHF (`chfdb`) | 15 (`chf01`-`chf15`) | recorded as joint "III-IV" | Two-lead ECG, 250 Hz |
-
-Total: 44 patients, 11,109 five-minute windows. Label counts: 32 high-risk (1), 12 low-risk (0).
-
-The data is **not** stored in this repo. Notebook 01 downloads it with `wfdb` into `data/raw/`.
-
-## Features
-
-11 features per window: `mean_rr`, `sdnn`, `rmssd`, `pnn50`, `lf_power`, `hf_power`, `lf_hf`, `rr_count`, `sdnn_trend`, `rmssd_trend`, `pnn50_trend`.
-
-- RR intervals outside 300-2000 ms are removed, and every removal is logged in `results/*_cleaning_stats.csv`.
-- Frequency-domain features: RR series resampled to a uniform 4 Hz grid, detrended, Welch PSD, then LF (0.04-0.15 Hz) and HF (0.15-0.4 Hz) band power.
-- Personalization features use only past windows (`shift(1)` rolling baselines), so no future information leaks in.
-
-## Validation
-
-- Splits are by `patient_id` (5-fold `GroupKFold`); patient overlap between train and validation was checked and is zero.
-- Window-level metrics are computed inside folds; patient-level metrics aggregate each patient's predictions into one out-of-fold prediction (44 patients, 44 predictions).
-
-## Results
-
-### Window-level, 5-fold GroupKFold
-
-| Model | Accuracy | Precision | Recall | F1 | AUROC |
-|---|---:|---:|---:|---:|---:|
-| Logistic Regression | 0.596 | 0.821 | 0.688 | 0.695 | 0.777 |
-| Random Forest | 0.710 | 0.785 | 0.854 | 0.802 | 0.658 |
-| XGBoost | 0.681 | 0.797 | 0.780 | 0.767 | 0.662 |
-
-### Patient-level (44 patients)
-
-| Model | Accuracy | Precision | Recall | F1 | AUROC |
-|---|---:|---:|---:|---:|---:|
-| Always predict high risk (reference) | 0.727 | 0.727 | 1.000 | 0.842 | 0.500 |
-| RF baseline | 0.705 | 0.771 | 0.844 | 0.806 | 0.555 |
-| Personalized RF | 0.727 | 0.778 | 0.875 | 0.824 | 0.557 |
-| GRU | 0.614 | 0.895 | 0.531 | 0.667 | 0.747 |
-
-**How to read this:** because 73% of patients are high-risk, accuracy and F1 look decent even for a model that ignores the input. AUROC is the more informative column. The GRU is the only model with clear ranking signal; personalization changes RF AUROC by +0.003 and reduces errors from 13 to 12 (one patient), which is not distinguishable from noise at n = 44. A bootstrap on the saved GRU predictions gives an AUROC 95% interval of roughly 0.58-0.90.
-
-Other analyses in notebook 07: patient drift vs. personalization magnitude, RF tree-disagreement uncertainty, SHAP explanations, error analysis, model agreement, threshold sweep (0.20-0.80) and risk stratification. Thresholds and risk groups are exploratory, not clinically validated.
-
-## Known limitations
-
-- **Database confound.** Every `chfdb` patient is NYHA III-IV and therefore label 1, while all label-0 patients come from `chf2db`. Models can partly learn recording source instead of severity. On the saved GRU predictions, AUROC falls from 0.747 (all 44) to 0.691 on `chf2db` only (n = 29). A chf2db-only ablation for all models is planned.
-- **Trend features.** `*_trend` is currently one linear slope per patient, copied to every window of that patient, rather than a rolling, time-varying signal. These features dominate the SHAP output, so results that use them (RF, personalized RF, GRU input, SHAP) are provisional until this is replaced with a rolling computation.
-- **Small cohort.** 44 patients, so patient-level metrics have wide uncertainty. Many windows per patient are correlated.
-- **Label granularity.** Binary risk only; `chfdb` does not separate NYHA III from IV.
-- **Not prospectively validated.** Personalization/drift relationships are observational.
-
-## Repository structure
+The project is organized around the following files and folders. Some generated files (such as the trained model) may be present locally but are not included in every copy of the repository.
 
 ```text
 chf-hrv-risk-prediction/
-├── notebooks/
-│   ├── 01_dataset_exploration.ipynb   # download + inspect both databases
-│   ├── 02_rr_cleaning.ipynb           # RR extraction, plausibility filtering, cleaning logs
-│   ├── 03_hrv_features.ipynb          # 5-min windows, HRV + trend features
-│   ├── 04_label_mapping.ipynb         # NYHA -> binary risk label, patient metadata
-│   ├── 05_baseline_models.ipynb       # LR / RF / XGBoost, GroupKFold, patient-level RF
-│   ├── 06_temporal_modeling.ipynb     # GRU (PyTorch), patient-level evaluation
-│   └── 07_personalization.ipynb       # baselines, drift, personalized RF, SHAP, analyses
-├── results/                           # cleaning statistics and saved predictions
-├── requirements.txt
+├── app.py                         # Streamlit dashboard entry point
+├── data/
+│   ├── hrv_healthy_profiles.csv    # Generated healthy-like test scenario
+│   └── hrv_high_risk_profiles.csv  # Generated high-risk-like test scenario
+├── models/
+│   └── rf_hrv_pipeline.joblib      # Trained model bundle expected by inference code
+├── src/
+│   ├── serial_reader.py            # ESP32 serial connection and record parsing
+│   ├── hrv_features.py              # HRV feature calculation and feature order
+│   └── inference.py                 # Model loading and prediction helpers
+├── 01_dataset_exploration.ipynb     # Dataset exploration
+├── 02_rr_cleaning.ipynb             # RR-interval cleaning
+├── 03_hrv_features.ipynb            # HRV feature engineering
+├── 04_label_mapping.ipynb           # Target-label mapping
+├── 05_baseline_models.ipynb         # Baseline model experiments
+├── 06_temporal_modeling.ipynb       # Temporal modelling experiments
+├── 07_personalization.ipynb          # Personalization experiments
+├── requirements.txt                 # Python dependencies
 └── README.md
 ```
 
-Generated at runtime and git-ignored: `data/raw/`, `data/processed/`.
+## 4. Data and Test Scenarios
 
-## Setup and running
+The dashboard's Test mode replays RR-interval values from the CSV files in `data/`:
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate          # Windows  (Linux/macOS: source .venv/bin/activate)
-pip install -r requirements.txt
-jupyter lab
+- `hrv_healthy_profiles.csv`
+- `hrv_high_risk_profiles.csv`
+
+These are **software test fixtures**, not verified healthy/high-risk clinical examples and are human recordings collected from 10 individuals. They are useful for checking CSV loading, replay, feature calculation, and dashboard rendering. A prediction shown for a scenario is determined by the loaded model and its learned decision boundary; the scenario name does not guarantee a particular prediction.
+
+## 5. Hardware and Live Data Flow
+
+The intended live collection path uses an **ESP32/ESP32-S3 development board** with a **MAX30102 optical pulse sensor module**. The microcontroller reads sensor data and sends serial records to the computer, where the dashboard's serial reader parses incoming records.
+
+High-level flow:
+
+```text
+MAX30102 sensor
+      ↓
+ESP32 / ESP32-S3 firmware
+      ↓ USB serial
+src/serial_reader.py
+      ↓ valid beat-to-beat RR intervals
+RR-interval window
+      ↓
+src/hrv_features.py
+      ↓
+src/inference.py + trained model bundle
+      ↓
+Streamlit dashboard: features, plots, and prediction
 ```
 
-Run the notebooks in order, 01 to 07. Each one reads files produced by the previous one (`data/processed/...`), and notebook 01 downloads the raw data. Notebooks are written to run from inside `notebooks/` (they use `../data/...` paths). Saved outputs are included, so you can read results without rerunning.
+The sensor provides optical pulse signals; the software derives or receives beat timing and RR intervals through the device firmware/data protocol. Reliable live HRV depends on stable sensor contact, valid beat detection, and appropriate signal quality. The dashboard's live prediction may take longer than Test mode because it must accumulate enough valid RR intervals.
 
-## Roadmap
+## 6. HRV and Machine-Learning Workflow
 
-- [x] Data acquisition, RR cleaning, windowing, HRV and trend features, labels
-- [x] Baselines with patient-aware cross-validation, patient-level evaluation
-- [x] GRU temporal model, personalized RF, drift, uncertainty, SHAP, error and threshold analysis
-- [ ] Replace per-patient trend with rolling window-level trend, rerun notebooks 05-07
-- [ ] chf2db-only ablation and database-indicator check
-- [ ] Patient-level AUROC with confidence intervals for all models
-- [ ] End-to-end inference pipeline, dashboard
-- [ ] ESP32 + MAX30102 live demo (illustrative only)
-- [ ] Final report and presentation
+The notebook sequence documents the analysis workflow:
 
-## References
+1. Explore the available dataset and its fields.
+2. Clean and validate RR-interval data.
+3. Calculate HRV features from RR-interval windows.
+4. Map source labels to the model target classes.
+5. Train and evaluate baseline models.
+6. Experiment with temporal modelling.
+7. Explore personalization approaches.
 
-1. Task Force of the ESC and NASPE, "Heart rate variability: standards of measurement, physiological interpretation, and clinical use," *Circulation*, 93(5):1043-1065, 1996.
-2. "Detection of congestive heart failure from RR intervals during long-term electrocardiographic recordings," *Heart Rhythm O2*, 2025.
-3. F. Noci et al., "Wearable technologies to predict and prevent heart failure hospitalizations: a systematic review," *Eur. Heart J. Digit. Health*, 6(5):868-877, 2025.
+The application uses a shared feature definition so inference follows the feature order expected by the trained model. When retraining or changing feature calculations, ensure the model bundle and inference code remain compatible.
 
-Data: PhysioNet CHF RR Interval Database and BIDMC Congestive Heart Failure Database (Goldberger et al., *Circulation*, 101(23):e215-e220, 2000).
+## 7. Setup and Run
 
-## Disclaimer
+Use a Python environment supported by the dependencies in the project's `requirements.txt`.
 
-For academic use only. The models, probabilities, thresholds and risk groups here must not be used for patient care or clinical decisions.
+### Windows (PowerShell)
+
+```powershell
+# From the repository root
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+
+streamlit run app.py
+```
+
+If your checkout does not contain `requirements.txt`, install the dependencies used by the project (including Streamlit, pandas, NumPy, plotting libraries, scikit-learn, joblib, and pyserial as required by the code) or restore the project's dependency file.
+
+### Required local files
+
+Before running the dashboard, verify that:
+
+- `app.py` is at the repository root.
+- The modules imported by `app.py` exist under `src/`.
+- The model bundle is at `models/rf_hrv_pipeline.joblib`, or update the model path in the inference/application code to match the actual file.
+- The two CSV test files are under `data/` if you want to use CSV replay in Test mode.
+- For Live ESP32 mode, the board is connected, its serial port is selected in the dashboard, and no other application (for example, Arduino Serial Monitor) is holding that port open.
+
+## 8. Operating Modes
+
+### Test mode
+
+Select one of the CSV test scenarios. The dashboard replays its RR intervals and runs the feature/prediction pipeline as the required data window becomes available. This mode is intended for software and interface testing without a live sensor.
+
+### Live ESP32 mode
+
+Select the serial port and baud rate matching the firmware. The dashboard reads incoming serial records and processes valid RR intervals according to the live-mode window and validation rules implemented in the current application. If no data appears, check USB connection, board firmware output, the selected COM port, baud rate, sensor contact, and whether another program has opened the port.
+
+## 9. Important Limitations
+
+- This is a prototype and research workflow, not a medical device.
+- Generated CSV scenarios do not establish clinical validity or represent real patient measurements.
+- Sensor motion, poor contact, missed beats, serial formatting, and signal artefacts can affect RR intervals and derived HRV features.
+- A model prediction is only as reliable as its training data, labels, validation method, and deployment compatibility.
+- Results from experiments should be reported with the dataset, split strategy, metrics, and limitations clearly stated. Avoid describing model output as a diagnosis.
+- Do not claim clinical performance, real-world accuracy, or patient benefit unless supported by appropriate evaluation evidence.
+
+## 10. References
+
+The following references provide background for HRV methodology, the sensor, and the software stack. They are background resources; they do not by themselves validate this project's model.
+
+1. Task Force of the European Society of Cardiology and the North American Society of Pacing and Electrophysiology. “Heart rate variability: Standards of measurement, physiological interpretation and clinical use.” _Circulation_, 93(5), 1043–1065, 1996. https://doi.org/10.1161/01.CIR.93.5.1043
+2. Shaffer, F., and Ginsberg, J. P. “An Overview of Heart Rate Variability Metrics and Norms.” _Frontiers in Public Health_, 5, 258, 2017. https://doi.org/10.3389/fpubh.2017.00258
+3. Analog Devices. _MAX30102 High-Sensitivity Pulse Oximeter and Heart-Rate Sensor for Wearable Health_. Product information and datasheet: https://www.analog.com/en/products/max30102.html
+4. Espressif Systems. _ESP32-S3 Documentation_. https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/
+5. Streamlit. _Streamlit Documentation_. https://docs.streamlit.io/
+6. scikit-learn. _User Guide_. https://scikit-learn.org/stable/user_guide.html
+7. pySerial. _Documentation_. https://pyserial.readthedocs.io/
+
+## 11. Reproducibility Notes
+
+For reproducible experiments, record the dataset source/version, label definitions, preprocessing rules, feature list and order, model parameters, train/validation/test split strategy, evaluation metrics, and software versions. Keep generated test fixtures clearly distinguished from collected sensor data and from any labelled research dataset.
